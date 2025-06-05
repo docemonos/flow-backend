@@ -37,15 +37,21 @@ app.get('/', (req, res) => {
 // 👤 Crear cliente en Flow
 app.post('/crear-cliente', async (req, res) => {
   try {
+    // 🎯 Ping de prueba de WooCommerce
+    if (req.body.webhook_id) {
+      console.log('🔄 Ping recibido desde WooCommerce:', req.body);
+      return res.status(200).json({ status: 'Ping OK desde WooCommerce' });
+    }
+
     let email, name, externalId, rut, country;
 
-    // 💡 Detecta si viene desde WooCommerce (formato billing)
+    // 💡 WooCommerce → billing
     if (req.body.billing) {
       const billing = req.body.billing;
       email = billing.email;
       name = `${billing.first_name || ''} ${billing.last_name || ''}`.trim();
     } else {
-      // 🧾 Formato directo (desde Make o frontend)
+      // 🧾 Otros orígenes
       ({ email, name, externalId, rut, country } = req.body);
     }
 
@@ -60,7 +66,7 @@ app.post('/crear-cliente', async (req, res) => {
       return res.status(400).json({ error: 'Correo inválido o dominio sin MX' });
     }
 
-    // 🔁 Generar externalId único si no se entrega
+    // 🔁 externalId si no viene
     if (!externalId) {
       externalId = `cli-${uuidv4()}`;
     }
