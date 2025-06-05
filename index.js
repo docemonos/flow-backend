@@ -1,4 +1,3 @@
-// index.js
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
@@ -38,16 +37,25 @@ app.get('/', (req, res) => {
 // 👤 Crear cliente en Flow
 app.post('/crear-cliente', async (req, res) => {
   try {
-    let { email, name, externalId, rut, country } = req.body;
+    let email, name, externalId, rut, country;
 
-    if (!email || !name) {
-      return res.status(400).json({ error: 'Faltan parámetros obligatorios: email y name' });
+    // 💡 Detecta si viene desde WooCommerce (formato billing)
+    if (req.body.billing) {
+      const billing = req.body.billing;
+      email = billing.email;
+      name = `${billing.first_name || ''} ${billing.last_name || ''}`.trim();
+    } else {
+      // 🧾 Formato directo (desde Make o frontend)
+      ({ email, name, externalId, rut, country } = req.body);
     }
 
-    // 🧹 Limpiar y validar el correo
+    if (!email || !name) {
+      console.log('❌ Datos faltantes:', req.body);
+      return res.status(400).json({ error: 'Faltan email o nombre para crear cliente' });
+    }
+
     const cleanEmail = email.trim().toLowerCase();
     const emailValido = await isEmailDeliverable(cleanEmail);
-
     if (!emailValido) {
       return res.status(400).json({ error: 'Correo inválido o dominio sin MX' });
     }
@@ -74,7 +82,10 @@ app.post('/crear-cliente', async (req, res) => {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
 
-    res.json(response.data);
+    res.json({
+      status: 'Cliente creado en Flow',
+      flowResponse: response.data
+    });
   } catch (err) {
     console.error('❌ Error al crear cliente:', err.response?.data || err.message);
     res.status(500).json({ error: err.response?.data || err.message });
