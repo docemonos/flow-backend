@@ -15,6 +15,12 @@ app.get('/', (req, res) => {
   res.send('✅ Backend Flow activo');
 });
 
+// ✅ DEBUG: Verificar si API_KEY se carga desde Railway
+app.get('/debug', (req, res) => {
+  console.log('🔐 API_KEY cargada desde Railway:', API_KEY);
+  res.send('🔍 Revisa los logs de Railway para ver si API_KEY se imprimió correctamente.');
+});
+
 // Crear cliente
 app.post('/crear-cliente', async (req, res) => {
   try {
