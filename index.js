@@ -3,118 +3,86 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
+const crypto = require('crypto');
+const qs = require('qs');
+const { v4: uuidv4 } = require('uuid');
+const { isEmailDeliverable } = require('./src/utils/emailValidator');
 
 const app = express();
+app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
 const API_KEY = process.env.API_KEY;
+const SECRET_KEY = process.env.SECRET_KEY;
 const FLOW_API = 'https://www.flow.cl/api';
 
-// Test endpoint
+// 🔐 Utilidad para calcular firma HMAC-SHA256
+function generarFirma(params, secretKey) {
+  const sortedKeys = Object.keys(params).sort();
+  const concatenado = sortedKeys.map(key => `${key}=${params[key]}`).join('&');
+  return crypto.createHmac('sha256', secretKey).update(concatenado).digest('hex');
+}
+
+// 🧪 DEBUG: Mostrar claves cargadas
+app.get('/debug', (req, res) => {
+  console.log('🔐 API_KEY:', API_KEY);
+  console.log('🔐 SECRET_KEY:', SECRET_KEY);
+  res.send('🔍 Claves cargadas correctamente. Revisa Railway Logs.');
+});
+
+// 🟢 Test backend activo
 app.get('/', (req, res) => {
   res.send('✅ Backend Flow activo');
 });
 
-// ✅ DEBUG: Verificar si API_KEY se carga desde Railway
-app.get('/debug', (req, res) => {
-  console.log('🔐 API_KEY cargada desde Railway:', API_KEY);
-  res.send('🔍 Revisa los logs de Railway para ver si API_KEY se imprimió correctamente.');
-});
-
-// Crear cliente
+// 👤 Crear cliente en Flow
 app.post('/crear-cliente', async (req, res) => {
   try {
-    const { email, name, externalId } = req.body;
-    if (!email || !name || !externalId) {
-      return res.status(400).json({ error: 'Faltan datos obligatorios del cliente' });
+    let { email, name, externalId, rut, country } = req.body;
+
+    if (!email || !name) {
+      return res.status(400).json({ error: 'Faltan parámetros obligatorios: email y name' });
     }
 
-    const response = await axios.post(`${FLOW_API}/customer/create`, {
+    // 🧹 Limpiar y validar el correo
+    const cleanEmail = email.trim().toLowerCase();
+    const emailValido = await isEmailDeliverable(cleanEmail);
+
+    if (!emailValido) {
+      return res.status(400).json({ error: 'Correo inválido o dominio sin MX' });
+    }
+
+    // 🔁 Generar externalId único si no se entrega
+    if (!externalId) {
+      externalId = `cli-${uuidv4()}`;
+    }
+
+    const params = {
       apiKey: API_KEY,
-      email,
+      email: cleanEmail,
       name,
-      externalId
+      externalId,
+      ...(rut && { rut }),
+      ...(country && { country })
+    };
+
+    params.s = generarFirma(params, SECRET_KEY);
+
+    console.log('📦 Enviando a Flow:', params);
+
+    const response = await axios.post(`${FLOW_API}/customer/create`, qs.stringify(params), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
 
     res.json(response.data);
   } catch (err) {
+    console.error('❌ Error al crear cliente:', err.response?.data || err.message);
     res.status(500).json({ error: err.response?.data || err.message });
   }
 });
 
-// Crear plan de suscripción
-app.post('/crear-plan', async (req, res) => {
-  try {
-    const { planId, name, amount, interval } = req.body;
-    if (!planId || !name || !amount || !interval) {
-      return res.status(400).json({ error: 'Faltan datos para crear el plan' });
-    }
-
-    const response = await axios.post(`${FLOW_API}/plan/create`, {
-      apiKey: API_KEY,
-      planId,
-      name,
-      amount,
-      interval, // 1=día, 2=semana, 3=mes, 4=año
-      currency: 'CLP',
-      description: `Plan ${name}`
-    });
-
-    res.json(response.data);
-  } catch (err) {
-    res.status(500).json({ error: err.response?.data || err.message });
-  }
-});
-
-// Crear suscripción
-app.post('/crear-suscripcion', async (req, res) => {
-  try {
-    const { customerId, planId } = req.body;
-    if (!customerId || !planId) {
-      return res.status(400).json({ error: 'Faltan datos de cliente o plan' });
-    }
-
-    const response = await axios.post(`${FLOW_API}/subscription/create`, {
-      apiKey: API_KEY,
-      customerId,
-      planId,
-      urlCallback: 'https://api-flow.up.railway.app/webhook-flow',
-      urlReturn: 'https://tusitio.cl/suscripcion-exitosa',
-      urlCancel: 'https://tusitio.cl/suscripcion-cancelada'
-    });
-
-    res.json(response.data);
-  } catch (err) {
-    res.status(500).json({ error: err.response?.data || err.message });
-  }
-});
-
-// Webhook para pagos de Flow
-app.post('/webhook-flow', async (req, res) => {
-  console.log('💰 Webhook recibido de Flow:', req.body);
-  const { status, customerEmail } = req.body;
-
-  try {
-    if (status === 'paid') {
-      await axios.post('https://tusitio.cl/wp-json/flow/membership-activate', {
-        email: customerEmail,
-        plan: 'premium'
-      });
-    } else if (status === 'failed') {
-      await axios.post('https://tusitio.cl/wp-json/flow/membership-downgrade', {
-        email: customerEmail
-      });
-    }
-
-    res.status(200).send('OK');
-  } catch (err) {
-    console.error('❌ Error al contactar WordPress:', err.message);
-    res.status(500).send('ERROR');
-  }
-});
-
-// Iniciar servidor
-const PORT = process.env.PORT || 3000;
+// 🚀 Iniciar servidor en puerto Railway
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });
