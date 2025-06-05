@@ -98,6 +98,37 @@ app.post('/crear-cliente', async (req, res) => {
   }
 });
 
+// 🔁 Crear suscripción en Flow
+app.post('/crear-suscripcion', async (req, res) => {
+  try {
+    const { customerId, planId } = req.body;
+
+    if (!customerId || !planId) {
+      return res.status(400).json({ error: 'Faltan customerId o planId' });
+    }
+
+    const params = {
+      apiKey: API_KEY,
+      customerId,
+      planId
+    };
+
+    params.s = generarFirma(params, SECRET_KEY);
+
+    const response = await axios.post(`${FLOW_API}/subscription/create`, qs.stringify(params), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+
+    res.json({
+      status: '✅ Suscripción creada correctamente',
+      flowResponse: response.data
+    });
+  } catch (err) {
+    console.error('❌ Error al crear suscripción:', err.response?.data || err.message);
+    res.status(500).json({ error: err.response?.data || err.message });
+  }
+});
+
 // 🚀 Iniciar servidor en puerto Railway
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 app.listen(PORT, () => {
