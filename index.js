@@ -129,53 +129,57 @@ app.get('/verificar-suscripciones', async (req, res) => {
     for (const [planNombre, planId] of Object.entries(PLANES_FLOW)) {
       if (!planId) continue;
 
-      const params = {
-        apiKey: API_KEY,
-        planId,
-        start: 0,
-        limit: 100
-      };
+      for (const estado of [1, 4]) { // Activas (1) y Canceladas (4)
+        const params = {
+          apiKey: API_KEY,
+          planId,
+          status: estado,
+          start: 0,
+          limit: 100
+        };
 
-      params.s = generarFirma(params, SECRET_KEY);
-      const url = `${FLOW_API}/subscription/list?${new URLSearchParams(params).toString()}`;
-      const response = await axios.get(url);
-      const suscripciones = response.data.data;
+        params.s = generarFirma(params, SECRET_KEY);
+        const url = `${FLOW_API}/subscription/list?${new URLSearchParams(params).toString()}`;
+        const response = await axios.get(url);
+        const suscripciones = response.data.data;
 
-      totalRevisadas += suscripciones.length;
+        totalRevisadas += suscripciones.length;
 
-      for (const sub of suscripciones) {
-        const { status, morose, customerExternalId } = sub;
-        const degradado = (status === 4 || morose === 1);
+        for (const sub of suscripciones) {
+          const { status, morose, customerExternalId } = sub;
 
-        const { data: cliente, error: errorCliente } = await supabase
-          .from('clientes')
-          .select('name, email')
-          .eq('external_id', customerExternalId)
-          .single();
+          const degradado = (status === 4 || morose === 1);
 
-        if (errorCliente || !cliente) {
-          console.warn(`⚠️ Cliente no encontrado para external_id: ${customerExternalId}`);
-        } else {
-          console.log(`👤 Cliente encontrado: ${cliente.name} (${cliente.email})`);
-        }
+          const { data: cliente, error: errorCliente } = await supabase
+            .from('clientes')
+            .select('name, email')
+            .eq('external_id', customerExternalId)
+            .single();
 
-        await supabase.from('verificaciones_suscripciones').insert({
-          external_id: customerExternalId,
-          plan: planNombre,
-          status,
-          morose,
-          degradado,
-          nombre: cliente?.name || 'NO ENCONTRADO',
-          email: cliente?.email || 'desconocido@redjudicial.cl'
-        });
+          if (errorCliente || !cliente) {
+            console.warn(`⚠️ Cliente no encontrado para external_id: ${customerExternalId}`);
+          } else {
+            console.log(`👤 Cliente encontrado: ${cliente.name} (${cliente.email})`);
+          }
 
-        if (degradado && customerExternalId) {
-          try {
-            await axios.post(WORDPRESS_DOWNGRADE_URL, { externalId: customerExternalId });
-            totalDegradadas++;
-            console.log(`⬇️ Degradado cliente ${customerExternalId} del plan ${planNombre}`);
-          } catch (err) {
-            console.error(`❌ Error degradando ${customerExternalId}:`, err.message);
+          await supabase.from('verificaciones_suscripciones').insert({
+            external_id: customerExternalId,
+            plan: planNombre,
+            status,
+            morose,
+            degradado,
+            nombre: cliente?.name || 'NO ENCONTRADO',
+            email: cliente?.email || 'desconocido@redjudicial.cl'
+          });
+
+          if (degradado && customerExternalId) {
+            try {
+              await axios.post(WORDPRESS_DOWNGRADE_URL, { externalId: customerExternalId });
+              totalDegradadas++;
+              console.log(`⬇️ Degradado cliente ${customerExternalId} del plan ${planNombre}`);
+            } catch (err) {
+              console.error(`❌ Error degradando ${customerExternalId}:`, err.message);
+            }
           }
         }
       }
