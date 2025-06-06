@@ -27,20 +27,29 @@ const PLANES_FLOW = {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-function generarFirma(params, secretKey) {
+function generarFirmaOrdenada(params, secretKey) {
+  const sortedKeys = Object.keys(params).sort();
+  const stringToSign = sortedKeys.map(k => `${k}${params[k]}`).join('');
+  return crypto.createHmac('sha256', secretKey).update(stringToSign).digest('hex');
+}
+
+function generarFirmaParaFlow(params, secretKey) {
   const sortedKeys = Object.keys(params).sort();
   const concatenado = sortedKeys.map(key => `${key}=${params[key]}`).join('&');
   return crypto.createHmac('sha256', secretKey).update(concatenado).digest('hex');
 }
 
+// ✅ Verificación básica
 app.get('/', (req, res) => {
   res.send('✅ Backend Flow activo');
 });
 
+// ✅ Test de claves
 app.get('/debug', (req, res) => {
   res.send('🔍 Claves cargadas correctamente.');
 });
 
+// ✅ Crear cliente
 app.post('/crear-cliente', async (req, res) => {
   try {
     let email, name, externalId, rut, country;
@@ -53,19 +62,13 @@ app.post('/crear-cliente', async (req, res) => {
       ({ email, name, externalId, rut, country } = req.body);
     }
 
-    if (!email || !name) {
-      return res.status(400).json({ error: 'Faltan email o nombre para crear cliente' });
-    }
+    if (!email || !name) return res.status(400).json({ error: 'Faltan email o nombre para crear cliente' });
 
     const cleanEmail = email.trim().toLowerCase();
     const emailValido = await isEmailDeliverable(cleanEmail);
-    if (!emailValido) {
-      return res.status(400).json({ error: 'Correo inválido o dominio sin MX' });
-    }
+    if (!emailValido) return res.status(400).json({ error: 'Correo inválido o dominio sin MX' });
 
-    if (!externalId) {
-      externalId = `cli-${uuidv4()}`;
-    }
+    if (!externalId) externalId = `cli-${uuidv4()}`;
 
     const params = {
       apiKey: API_KEY,
@@ -76,7 +79,7 @@ app.post('/crear-cliente', async (req, res) => {
       ...(country && { country })
     };
 
-    params.s = generarFirma(params, SECRET_KEY);
+    params.s = generarFirmaParaFlow(params, SECRET_KEY);
 
     const response = await axios.post(`${FLOW_API}/customer/create`, qs.stringify(params), {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
@@ -91,10 +94,10 @@ app.post('/crear-cliente', async (req, res) => {
   }
 });
 
+// ✅ Crear suscripción desde ID (ya lo tenías)
 app.post('/crear-suscripcion', async (req, res) => {
   try {
     const { customerId, planId, commerceOrder, urlSuccess, urlFailure } = req.body;
-
     if (!customerId || !planId || !commerceOrder || !urlSuccess) {
       return res.status(400).json({ error: 'Faltan parámetros obligatorios' });
     }
@@ -108,7 +111,7 @@ app.post('/crear-suscripcion', async (req, res) => {
       urlFailure: urlFailure || urlSuccess
     };
 
-    params.s = generarFirma(params, SECRET_KEY);
+    params.s = generarFirmaParaFlow(params, SECRET_KEY);
 
     const response = await axios.post(`${FLOW_API}/subscription/create`, qs.stringify(params), {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
@@ -121,6 +124,50 @@ app.post('/crear-suscripcion', async (req, res) => {
   }
 });
 
+// ✅ Crear suscripción por EMAIL (nuevo endpoint)
+app.post('/crear-suscripcion-email', async (req, res) => {
+  try {
+    const { email, plan_id } = req.body;
+    if (!email || !plan_id) return res.status(400).json({ error: 'Faltan email o plan_id' });
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    // Buscar cliente
+    const buscarParams = { apiKey: API_KEY, email: cleanEmail };
+    const buscarFirma = generarFirmaOrdenada(buscarParams, SECRET_KEY);
+    const buscarRes = await axios.post(`${FLOW_API}/customer/getByEmail`, {
+      ...buscarParams,
+      s: buscarFirma
+    });
+
+    const customerId = buscarRes.data.customerId;
+    const commerceOrder = `orden-${uuidv4()}`;
+    const urlSuccess = 'https://www.redjudicial.cl/pago-exitoso';
+
+    const suscripcionParams = {
+      apiKey: API_KEY,
+      customerId,
+      planId: plan_id,
+      commerceOrder,
+      urlSuccess,
+      urlFailure: urlSuccess
+    };
+
+    const firma = generarFirmaParaFlow(suscripcionParams, SECRET_KEY);
+    suscripcionParams.s = firma;
+
+    const response = await axios.post(`${FLOW_API}/subscription/create`, qs.stringify(suscripcionParams), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+
+    res.json({ status: '✅ Suscripción creada por email', flowResponse: response.data });
+  } catch (error) {
+    console.error('❌ Error en /crear-suscripcion-email:', error.response?.data || error.message);
+    res.status(500).json({ error: error.response?.data || error.message });
+  }
+});
+
+// ✅ Verificación de suscripciones
 app.get('/verificar-suscripciones', async (req, res) => {
   try {
     let totalRevisadas = 0;
@@ -129,7 +176,7 @@ app.get('/verificar-suscripciones', async (req, res) => {
     for (const [planNombre, planId] of Object.entries(PLANES_FLOW)) {
       if (!planId) continue;
 
-      for (const estado of [1, 4]) { // Activas (1) y Canceladas (4)
+      for (const estado of [1, 4]) {
         const params = {
           apiKey: API_KEY,
           planId,
@@ -138,7 +185,7 @@ app.get('/verificar-suscripciones', async (req, res) => {
           limit: 100
         };
 
-        params.s = generarFirma(params, SECRET_KEY);
+        params.s = generarFirmaParaFlow(params, SECRET_KEY);
         const url = `${FLOW_API}/subscription/list?${new URLSearchParams(params).toString()}`;
         const response = await axios.get(url);
         const suscripciones = response.data.data;
@@ -156,12 +203,6 @@ app.get('/verificar-suscripciones', async (req, res) => {
             .eq('external_id', customerExternalId)
             .single();
 
-          if (errorCliente || !cliente) {
-            console.warn(`⚠️ Cliente no encontrado para external_id: ${customerExternalId}`);
-          } else {
-            console.log(`👤 Cliente encontrado: ${cliente.name} (${cliente.email})`);
-          }
-
           await supabase.from('verificaciones_suscripciones').insert({
             external_id: customerExternalId,
             plan: planNombre,
@@ -176,7 +217,6 @@ app.get('/verificar-suscripciones', async (req, res) => {
             try {
               await axios.post(WORDPRESS_DOWNGRADE_URL, { externalId: customerExternalId });
               totalDegradadas++;
-              console.log(`⬇️ Degradado cliente ${customerExternalId} del plan ${planNombre}`);
             } catch (err) {
               console.error(`❌ Error degradando ${customerExternalId}:`, err.message);
             }
@@ -191,7 +231,6 @@ app.get('/verificar-suscripciones', async (req, res) => {
       totalRevisadas,
       totalDegradadas
     });
-
   } catch (error) {
     console.error('❌ Error verificando suscripciones:', error.response?.data || error.message);
     res.status(500).json({ error: error.response?.data || error.message });
