@@ -147,22 +147,26 @@ app.get('/verificar-suscripciones', async (req, res) => {
         const { status, morose, customerExternalId } = sub;
         const degradado = (status === 4 || morose === 1);
 
-        // Buscar cliente en Supabase
-        const { data: cliente } = await supabase
+        const { data: cliente, error: errorCliente } = await supabase
           .from('clientes')
           .select('name, email')
           .eq('external_id', customerExternalId)
           .single();
 
-        // Guardar verificación en Supabase
+        if (errorCliente || !cliente) {
+          console.warn(`⚠️ Cliente no encontrado para external_id: ${customerExternalId}`);
+        } else {
+          console.log(`👤 Cliente encontrado: ${cliente.name} (${cliente.email})`);
+        }
+
         await supabase.from('verificaciones_suscripciones').insert({
           external_id: customerExternalId,
           plan: planNombre,
           status,
           morose,
           degradado,
-          nombre: cliente?.name || null,
-          email: cliente?.email || null
+          nombre: cliente?.name || 'NO ENCONTRADO',
+          email: cliente?.email || 'desconocido@redjudicial.cl'
         });
 
         if (degradado && customerExternalId) {
