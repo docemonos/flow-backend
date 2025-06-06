@@ -76,7 +76,6 @@ app.post('/crear-cliente', async (req, res) => {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
 
-    // Guardar en Supabase
     await supabase.from('clientes').insert({ email: cleanEmail, name, external_id: externalId });
 
     res.json({ status: 'Cliente creado en Flow y Supabase', flowResponse: response.data });
@@ -91,7 +90,11 @@ app.get('/verificar-suscripciones', async (req, res) => {
     const params = {
       apiKey: API_KEY
     };
+
     params.s = generarFirma(params, SECRET_KEY);
+
+    // Diagnóstico de envío a Flow
+    console.log('🧪 Enviando a Flow:', params);
 
     const response = await axios.post(`${FLOW_API}/subscription/list`, qs.stringify(params), {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
@@ -115,9 +118,10 @@ app.get('/verificar-suscripciones', async (req, res) => {
     }
 
     res.json({ success: true, message: '✔️ Verificación finalizada' });
+
   } catch (error) {
-    console.error('❌ Error en verificación de suscripciones:', error.message);
-    res.status(500).json({ error: error.message });
+    console.error('❌ Error Flow subscription/list:', error.response?.data || error.message);
+    res.status(500).json({ error: error.response?.data || error.message });
   }
 });
 
