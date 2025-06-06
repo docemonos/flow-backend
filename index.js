@@ -93,7 +93,6 @@ app.get('/verificar-suscripciones', async (req, res) => {
 
     params.s = generarFirma(params, SECRET_KEY);
 
-    // Diagnóstico de envío a Flow
     console.log('🧪 Enviando a Flow:', params);
 
     const response = await axios.post(`${FLOW_API}/subscription/list`, qs.stringify(params), {
@@ -122,6 +121,38 @@ app.get('/verificar-suscripciones', async (req, res) => {
   } catch (error) {
     console.error('❌ Error Flow subscription/list:', error.response?.data || error.message);
     res.status(500).json({ error: error.response?.data || error.message });
+  }
+});
+
+app.post('/crear-suscripcion', async (req, res) => {
+  try {
+    const { customerId, planId, commerceOrder, urlSuccess, urlFailure } = req.body;
+
+    if (!customerId || !planId || !commerceOrder || !urlSuccess) {
+      return res.status(400).json({ error: 'Faltan parámetros obligatorios' });
+    }
+
+    const params = {
+      apiKey: API_KEY,
+      customerId,
+      planId,
+      commerceOrder,
+      urlSuccess,
+      urlFailure: urlFailure || urlSuccess
+    };
+
+    params.s = generarFirma(params, SECRET_KEY);
+
+    console.log('📨 Enviando a Flow:', params);
+
+    const response = await axios.post(`${FLOW_API}/subscription/create`, qs.stringify(params), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+
+    res.json({ status: '✅ Suscripción creada correctamente', flowResponse: response.data });
+  } catch (err) {
+    console.error('❌ Error al crear suscripción:', err.response?.data || err.message);
+    res.status(500).json({ error: err.response?.data || err.message });
   }
 });
 
