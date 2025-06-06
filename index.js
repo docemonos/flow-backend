@@ -19,7 +19,6 @@ const WORDPRESS_DOWNGRADE_URL = 'https://www.redjudicial.cl/wp-json/custom/v1/do
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-// Planes en .env
 const PLANES_FLOW = {
   basico: process.env.PLAN_ID_BASICO,
   premium: process.env.PLAN_ID_PREMIUM,
@@ -148,16 +147,24 @@ app.get('/verificar-suscripciones', async (req, res) => {
         const { status, morose, customerExternalId } = sub;
         const degradado = (status === 4 || morose === 1);
 
-        // 🗃 Guarda cada revisión en Supabase
+        // Buscar cliente en Supabase
+        const { data: cliente } = await supabase
+          .from('clientes')
+          .select('name, email')
+          .eq('external_id', customerExternalId)
+          .single();
+
+        // Guardar verificación en Supabase
         await supabase.from('verificaciones_suscripciones').insert({
           external_id: customerExternalId,
           plan: planNombre,
           status,
           morose,
-          degradado
+          degradado,
+          nombre: cliente?.name || null,
+          email: cliente?.email || null
         });
 
-        // ⬇️ Si corresponde, ejecutar downgrade
         if (degradado && customerExternalId) {
           try {
             await axios.post(WORDPRESS_DOWNGRADE_URL, { externalId: customerExternalId });
