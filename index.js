@@ -19,6 +19,13 @@ const WORDPRESS_DOWNGRADE_URL = 'https://www.redjudicial.cl/wp-json/custom/v1/do
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
+// Planes en .env
+const PLANES_FLOW = {
+  basico: process.env.PLAN_ID_BASICO,
+  premium: process.env.PLAN_ID_PREMIUM,
+  elite: process.env.PLAN_ID_ELITE
+};
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 function generarFirma(params, secretKey) {
@@ -27,12 +34,12 @@ function generarFirma(params, secretKey) {
   return crypto.createHmac('sha256', secretKey).update(concatenado).digest('hex');
 }
 
-app.get('/debug', (req, res) => {
-  res.send('🔍 Claves cargadas correctamente.');
-});
-
 app.get('/', (req, res) => {
   res.send('✅ Backend Flow activo');
+});
+
+app.get('/debug', (req, res) => {
+  res.send('🔍 Claves cargadas correctamente.');
 });
 
 app.post('/crear-cliente', async (req, res) => {
@@ -85,45 +92,6 @@ app.post('/crear-cliente', async (req, res) => {
   }
 });
 
-app.get('/verificar-suscripciones', async (req, res) => {
-  try {
-    const params = {
-      apiKey: API_KEY
-    };
-
-    params.s = generarFirma(params, SECRET_KEY);
-
-    console.log('🧪 Enviando a Flow:', params);
-
-    const response = await axios.post(`${FLOW_API}/subscription/list`, qs.stringify(params), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-    });
-
-    const suscripciones = response.data;
-
-    for (const sub of suscripciones) {
-      if (sub.status === 'canceled' || sub.status === 'failed') {
-        const externalId = sub.custom || sub.customerExternalId;
-
-        if (externalId) {
-          try {
-            await axios.post(WORDPRESS_DOWNGRADE_URL, { externalId });
-            console.log(`⬇️ Usuario degradado automáticamente: ${externalId}`);
-          } catch (err) {
-            console.error(`❌ Error degradando ${externalId}:`, err.message);
-          }
-        }
-      }
-    }
-
-    res.json({ success: true, message: '✔️ Verificación finalizada' });
-
-  } catch (error) {
-    console.error('❌ Error Flow subscription/list:', error.response?.data || error.message);
-    res.status(500).json({ error: error.response?.data || error.message });
-  }
-});
-
 app.post('/crear-suscripcion', async (req, res) => {
   try {
     const { customerId, planId, commerceOrder, urlSuccess, urlFailure } = req.body;
@@ -143,8 +111,6 @@ app.post('/crear-suscripcion', async (req, res) => {
 
     params.s = generarFirma(params, SECRET_KEY);
 
-    console.log('📨 Enviando a Flow:', params);
-
     const response = await axios.post(`${FLOW_API}/subscription/create`, qs.stringify(params), {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
@@ -153,6 +119,56 @@ app.post('/crear-suscripcion', async (req, res) => {
   } catch (err) {
     console.error('❌ Error al crear suscripción:', err.response?.data || err.message);
     res.status(500).json({ error: err.response?.data || err.message });
+  }
+});
+
+app.get('/verificar-suscripciones', async (req, res) => {
+  try {
+    let totalRevisadas = 0;
+    let totalDegradadas = 0;
+
+    for (const [planNombre, planId] of Object.entries(PLANES_FLOW)) {
+      if (!planId) continue;
+
+      const params = {
+        apiKey: API_KEY,
+        planId,
+        start: 0,
+        limit: 100
+      };
+
+      params.s = generarFirma(params, SECRET_KEY);
+      const url = `${FLOW_API}/subscription/list?${new URLSearchParams(params).toString()}`;
+      const response = await axios.get(url);
+      const suscripciones = response.data.data;
+
+      totalRevisadas += suscripciones.length;
+
+      for (const sub of suscripciones) {
+        const { status, morose, customerExternalId } = sub;
+
+        if ((status === 4 || morose === 1) && customerExternalId) {
+          try {
+            await axios.post(WORDPRESS_DOWNGRADE_URL, { externalId: customerExternalId });
+            totalDegradadas++;
+            console.log(`⬇️ Degradado cliente ${customerExternalId} del plan ${planNombre}`);
+          } catch (err) {
+            console.error(`❌ Error degradando ${customerExternalId}:`, err.message);
+          }
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      message: '✔️ Verificación finalizada',
+      totalRevisadas,
+      totalDegradadas
+    });
+
+  } catch (error) {
+    console.error('❌ Error verificando suscripciones:', error.response?.data || error.message);
+    res.status(500).json({ error: error.response?.data || error.message });
   }
 });
 
