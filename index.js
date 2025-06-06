@@ -146,8 +146,19 @@ app.get('/verificar-suscripciones', async (req, res) => {
 
       for (const sub of suscripciones) {
         const { status, morose, customerExternalId } = sub;
+        const degradado = (status === 4 || morose === 1);
 
-        if ((status === 4 || morose === 1) && customerExternalId) {
+        // 🗃 Guarda cada revisión en Supabase
+        await supabase.from('verificaciones_suscripciones').insert({
+          external_id: customerExternalId,
+          plan: planNombre,
+          status,
+          morose,
+          degradado
+        });
+
+        // ⬇️ Si corresponde, ejecutar downgrade
+        if (degradado && customerExternalId) {
           try {
             await axios.post(WORDPRESS_DOWNGRADE_URL, { externalId: customerExternalId });
             totalDegradadas++;
