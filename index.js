@@ -85,7 +85,12 @@ app.post('/crear-cliente', async (req, res) => {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
 
-    await supabase.from('clientes').insert({ email: cleanEmail, name, external_id: externalId });
+    await supabase.from('clientes').insert({
+  email: cleanEmail,
+  name,
+  external_id: externalId,
+  customer_id: response.data.customerId
+});
 
     res.json({ status: 'Cliente creado en Flow y Supabase', flowResponse: response.data });
   } catch (err) {
@@ -194,14 +199,43 @@ app.get('/verificar-suscripciones', async (req, res) => {
 
         for (const sub of suscripciones) {
           const { status, morose, customerExternalId } = sub;
-
           const degradado = (status === 4 || morose === 1);
 
-          const { data: cliente, error: errorCliente } = await supabase
+          // Intentar obtener desde Supabase
+          let { data: cliente, error: errorCliente } = await supabase
             .from('clientes')
             .select('name, email')
-            .eq('external_id', customerExternalId)
+            .eq('customer_id', customerExternalId)
             .single();
+
+          // Si no hay datos en Supabase, los buscamos en Flow
+          if ((!cliente || errorCliente) && customerExternalId) {
+            const getParams = {
+              apiKey: API_KEY,
+              customerExternalId
+            };
+            getParams.s = generarFirmaParaFlow(getParams, SECRET_KEY);
+
+            try {
+              const { data } = await axios.post(`${FLOW_API}/customer/get`, qs.stringify(getParams), {
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+              });
+
+              cliente = {
+                name: data.name || 'Desconocido',
+                email: data.email || 'desconocido@redjudicial.cl'
+              };
+
+              // También lo guardamos en Supabase
+              await supabase.from('clientes').insert({
+                email: cliente.email,
+                name: cliente.name,
+                external_id: customerExternalId
+              });
+            } catch (errorFlow) {
+              console.warn(`⚠️ No se pudo obtener cliente desde Flow: ${customerExternalId}`);
+            }
+          }
 
           await supabase.from('verificaciones_suscripciones').insert({
             external_id: customerExternalId,
