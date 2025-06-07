@@ -205,7 +205,7 @@ app.get('/verificar-suscripciones', async (req, res) => {
           let { data: cliente, error: errorCliente } = await supabase
             .from('clientes')
             .select('name, email')
-            .eq('customer_id', customerExternalId)
+            .eq('flow_customer_id', customerExternalId)
             .single();
 
           // Si no hay datos en Supabase, los buscamos en Flow
