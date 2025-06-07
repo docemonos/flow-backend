@@ -182,6 +182,7 @@ app.get('/verificar-suscripciones', async (req, res) => {
       if (!planId) continue;
 
       for (const estado of [1, 4]) {
+        // 1) Obtener lista de suscripciones de Flow
         const params = {
           apiKey: API_KEY,
           planId,
@@ -189,30 +190,28 @@ app.get('/verificar-suscripciones', async (req, res) => {
           start: 0,
           limit: 100
         };
-
         params.s = generarFirmaParaFlow(params, SECRET_KEY);
-        const url = `${FLOW_API}/subscription/list?${new URLSearchParams(params).toString()}`;
+        const url = `${FLOW_API}/subscription/list?${new URLSearchParams(params)}`;
         const response = await axios.get(url);
-        const suscripciones = response.data.data;
+        const suscripciones = response.data.data || [];
         totalRevisadas += suscripciones.length;
 
         for (const sub of suscripciones) {
-          const { status, morose, customerId } = sub;           // ← customerId viene de Flow
+          const { status, morose, customerExternalId } = sub; // ← aquí cambiamos
           const degradado = (status === 4 || morose === 1);
 
-          // 1) Intentar obtener cliente desde Supabase por customer_id
-          let { data: cliente, error: errorCliente } = await supabase
+          // 2) Intentar obtener cliente en Supabase por customerExternalId
+          let { data: cliente, error } = await supabase
             .from('clientes')
             .select('name, email')
-            .eq('customer_id', customerId)                 // ← clave: buscá por customer_id
+            .eq('customer_id', customerExternalId)  // columna donde guardaste el ID de Flow
             .single();
 
-          // 2) Si no existe, buscarlo en Flow y guardar en Supabase
-          if ((!cliente || errorCliente) && customerId) {
-            const getParams = { apiKey: API_KEY, customerId };
-            getParams.s = generarFirmaParaFlow(getParams, SECRET_KEY);
-
+          // 3) Si no está, lo buscamos en Flow y lo guardamos
+          if ((!cliente || error) && customerExternalId) {
             try {
+              const getParams = { apiKey: API_KEY, customerExternalId };
+              getParams.s = generarFirmaParaFlow(getParams, SECRET_KEY);
               const { data } = await axios.post(
                 `${FLOW_API}/customer/get`,
                 qs.stringify(getParams),
@@ -220,25 +219,25 @@ app.get('/verificar-suscripciones', async (req, res) => {
               );
 
               cliente = {
-                name: data.name || 'Desconocido',
+                name:  data.name  || 'Desconocido',
                 email: data.email || 'desconocido@redjudicial.cl'
               };
 
-              // Guardamos en Supabase para futuras consultas
+              // lo persistimos en Supabase
               await supabase.from('clientes').insert({
-                email:      cliente.email,
-                name:       cliente.name,
+                name,
+                email,
                 external_id: data.externalId,
-                customer_id: data.customerId     // ← guarda en la columna customer_id
+                customer_id: data.customerId
               });
             } catch {
               cliente = { name: 'NO ENCONTRADO', email: 'desconocido@redjudicial.cl' };
             }
           }
 
-          // 3) Insertar verificación
+          // 4) Insertar registro de verificación
           await supabase.from('verificaciones_suscripciones').insert({
-            external_id: sub.custom || sub.customerExternalId,
+            external_id: customerExternalId,
             plan:        planNombre,
             status,
             morose,
@@ -247,13 +246,13 @@ app.get('/verificar-suscripciones', async (req, res) => {
             email:       cliente.email
           });
 
-          // 4) Si corresponde, hacer downgrade en WP
+          // 5) Si está moroso o cancelado, disparar downgrade en WP
           if (degradado) {
             try {
-              await axios.post(WORDPRESS_DOWNGRADE_URL, { externalId: customerId });
+              await axios.post(WORDPRESS_DOWNGRADE_URL, { externalId: customerExternalId });
               totalDegradadas++;
             } catch (err) {
-              console.error(`❌ Error degradando ${customerId}:`, err.message);
+              console.error(`Error degradando ${customerExternalId}:`, err.message);
             }
           }
         }
@@ -262,14 +261,14 @@ app.get('/verificar-suscripciones', async (req, res) => {
 
     return res.json({
       success: true,
-      message: '✔️ Verificación finalizada',
+      message:       '✔️ Verificación finalizada',
       totalRevisadas,
       totalDegradadas
     });
 
-  } catch (error) {
-    console.error('❌ Error verificando suscripciones:', error.response?.data || error.message);
-    return res.status(500).json({ error: error.response?.data || error.message });
+  } catch (err) {
+    console.error('Error en verificar-suscripciones:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
