@@ -200,11 +200,11 @@ app.get('/verificar-suscripciones', async (req, res) => {
           const { status, morose, customerId } = sub;           // ← customerId viene de Flow
           const degradado = (status === 4 || morose === 1);
 
-          // 1) Intentar obtener cliente desde Supabase por flow_customer_id
+          // 1) Intentar obtener cliente desde Supabase por customer_id
           let { data: cliente, error: errorCliente } = await supabase
             .from('clientes')
             .select('name, email')
-            .eq('flow_customer_id', customerId)                 // ← clave: buscá por flow_customer_id
+            .eq('customer_id', customerId)                 // ← clave: buscá por customer_id
             .single();
 
           // 2) Si no existe, buscarlo en Flow y guardar en Supabase
@@ -226,10 +226,10 @@ app.get('/verificar-suscripciones', async (req, res) => {
 
               // Guardamos en Supabase para futuras consultas
               await supabase.from('clientes').insert({
-                email: cliente.email,
-                name: cliente.name,
+                email:      cliente.email,
+                name:       cliente.name,
                 external_id: data.externalId,
-                flow_customer_id: data.customerId
+                customer_id: data.customerId     // ← guarda en la columna customer_id
               });
             } catch {
               cliente = { name: 'NO ENCONTRADO', email: 'desconocido@redjudicial.cl' };
@@ -239,12 +239,12 @@ app.get('/verificar-suscripciones', async (req, res) => {
           // 3) Insertar verificación
           await supabase.from('verificaciones_suscripciones').insert({
             external_id: sub.custom || sub.customerExternalId,
-            plan: planNombre,
+            plan:        planNombre,
             status,
             morose,
             degradado,
-            nombre: cliente.name,
-            email: cliente.email
+            nombre:      cliente.name,
+            email:       cliente.email
           });
 
           // 4) Si corresponde, hacer downgrade en WP
