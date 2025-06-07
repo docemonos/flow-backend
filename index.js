@@ -194,80 +194,82 @@ app.get('/verificar-suscripciones', async (req, res) => {
         const url = `${FLOW_API}/subscription/list?${new URLSearchParams(params).toString()}`;
         const response = await axios.get(url);
         const suscripciones = response.data.data;
-
         totalRevisadas += suscripciones.length;
 
         for (const sub of suscripciones) {
-          const { status, morose, customerExternalId } = sub;
+          const { status, morose, customerId } = sub;           // ← customerId viene de Flow
           const degradado = (status === 4 || morose === 1);
 
-          // Intentar obtener desde Supabase
+          // 1) Intentar obtener cliente desde Supabase por flow_customer_id
           let { data: cliente, error: errorCliente } = await supabase
             .from('clientes')
             .select('name, email')
-            .eq('flow_customer_id', customerExternalId)
+            .eq('flow_customer_id', customerId)                 // ← clave: buscá por flow_customer_id
             .single();
 
-          // Si no hay datos en Supabase, los buscamos en Flow
-          if ((!cliente || errorCliente) && customerExternalId) {
-            const getParams = {
-              apiKey: API_KEY,
-              customerExternalId
-            };
+          // 2) Si no existe, buscarlo en Flow y guardar en Supabase
+          if ((!cliente || errorCliente) && customerId) {
+            const getParams = { apiKey: API_KEY, customerId };
             getParams.s = generarFirmaParaFlow(getParams, SECRET_KEY);
 
             try {
-              const { data } = await axios.post(`${FLOW_API}/customer/get`, qs.stringify(getParams), {
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-              });
+              const { data } = await axios.post(
+                `${FLOW_API}/customer/get`,
+                qs.stringify(getParams),
+                { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+              );
 
               cliente = {
                 name: data.name || 'Desconocido',
                 email: data.email || 'desconocido@redjudicial.cl'
               };
 
-              // También lo guardamos en Supabase
+              // Guardamos en Supabase para futuras consultas
               await supabase.from('clientes').insert({
                 email: cliente.email,
                 name: cliente.name,
-                external_id: customerExternalId
+                external_id: data.externalId,
+                flow_customer_id: data.customerId
               });
-            } catch (errorFlow) {
-              console.warn(`⚠️ No se pudo obtener cliente desde Flow: ${customerExternalId}`);
+            } catch {
+              cliente = { name: 'NO ENCONTRADO', email: 'desconocido@redjudicial.cl' };
             }
           }
 
+          // 3) Insertar verificación
           await supabase.from('verificaciones_suscripciones').insert({
-            external_id: customerExternalId,
+            external_id: sub.custom || sub.customerExternalId,
             plan: planNombre,
             status,
             morose,
             degradado,
-            nombre: cliente?.name || 'NO ENCONTRADO',
-            email: cliente?.email || 'desconocido@redjudicial.cl'
+            nombre: cliente.name,
+            email: cliente.email
           });
 
-          if (degradado && customerExternalId) {
+          // 4) Si corresponde, hacer downgrade en WP
+          if (degradado) {
             try {
-              await axios.post(WORDPRESS_DOWNGRADE_URL, { externalId: customerExternalId });
+              await axios.post(WORDPRESS_DOWNGRADE_URL, { externalId: customerId });
               totalDegradadas++;
             } catch (err) {
-              console.error(`❌ Error degradando ${customerExternalId}:`, err.message);
+              console.error(`❌ Error degradando ${customerId}:`, err.message);
             }
           }
         }
       }
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: '✔️ Verificación finalizada',
       totalRevisadas,
       totalDegradadas
     });
+
   } catch (error) {
     console.error('❌ Error verificando suscripciones:', error.response?.data || error.message);
-    res.status(500).json({ error: error.response?.data || error.message });
+    return res.status(500).json({ error: error.response?.data || error.message });
   }
 });
 
